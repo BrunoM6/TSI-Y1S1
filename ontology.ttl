@@ -1,0 +1,155 @@
+@prefix factory: <http://factory.tsi.org/ontology#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+factory: a owl:Ontology ;
+    rdfs:label "TSI Project Ontology" ;
+    rdfs:comment "Ontology for CNC Machine Failure Diagnosis" .
+
+factory:CleanFilter a factory:MaintenanceProcedure,
+        owl:NamedIndividual ;
+    rdfs:label "CleanFilter" ;
+    factory:costEuro "50"^^xsd:float ;
+    factory:durationHours "1.5"^^xsd:float ;
+    factory:mitigates factory:CloggedFilter ;
+    factory:riskRating 1 ;
+    factory:targetsComponent factory:Filter .
+
+factory:FlushCoolant a factory:MaintenanceProcedure,
+        owl:NamedIndividual ;
+    rdfs:label "FlushCoolant" ;
+    factory:costEuro "90"^^xsd:float ;
+    factory:durationHours "2.0"^^xsd:float ;
+    factory:mitigates factory:LowCoolingEfficiency ;
+    factory:riskRating 2 ;
+    factory:targetsComponent factory:CoolingSystem .
+
+factory:RepairFan a factory:MaintenanceProcedure,
+        owl:NamedIndividual ;
+    rdfs:label "RepairFan" ;
+    factory:costEuro "150"^^xsd:float ;
+    factory:durationHours "2.0"^^xsd:float ;
+    factory:mitigates factory:FanFault ;
+    factory:riskRating 2 ;
+    factory:targetsComponent factory:Fan .
+
+factory:ReplaceBearing a factory:MaintenanceProcedure,
+        owl:NamedIndividual ;
+    rdfs:label "ReplaceBearing" ;
+    factory:costEuro "600"^^xsd:float ;
+    factory:durationHours "6.0"^^xsd:float ;
+    factory:mitigates factory:BearingWearHigh ;
+    factory:riskRating 3 ;
+    factory:targetsComponent factory:Bearing .
+
+factory:affectsComponent a owl:ObjectProperty ;
+    rdfs:domain factory:FailureCause ;
+    rdfs:range factory:Component .
+
+factory:causesSymptom a owl:ObjectProperty ;
+    rdfs:domain factory:FailureCause ;
+    rdfs:range factory:Symptom .
+
+factory:costEuro a owl:DatatypeProperty .
+
+factory:durationHours a owl:DatatypeProperty .
+
+factory:hasFunction a owl:DatatypeProperty .
+
+factory:mitigates a owl:ObjectProperty ;
+    rdfs:domain factory:MaintenanceProcedure ;
+    rdfs:range factory:FailureCause .
+
+factory:partOf a owl:ObjectProperty ;
+    rdfs:domain factory:Component ;
+    rdfs:range [ a owl:Class ;
+            owl:unionOf ( factory:System factory:Component ) ] .
+
+factory:riskRating a owl:DatatypeProperty .
+
+factory:targetsComponent a owl:ObjectProperty ;
+    rdfs:domain factory:MaintenanceProcedure ;
+    rdfs:range factory:Component .
+
+factory:BearingWearHigh a factory:FailureCause,
+        owl:NamedIndividual ;
+    rdfs:label "BearingWearHigh" ;
+    factory:affectsComponent factory:Bearing ;
+    factory:causesSymptom factory:HighVibration .
+
+factory:CloggedFilter a factory:FailureCause,
+        owl:NamedIndividual ;
+    rdfs:label "CloggedFilter" ;
+    factory:affectsComponent factory:Filter ;
+    factory:causesSymptom factory:LowCoolantFlow .
+
+factory:FanFault a factory:FailureCause,
+        owl:NamedIndividual ;
+    rdfs:label "FanFault" ;
+    factory:affectsComponent factory:Fan ;
+    factory:causesSymptom factory:HighSpindleTemp .
+
+factory:HighVibration a factory:Symptom,
+        owl:NamedIndividual ;
+    rdfs:label "HighVibration" .
+
+factory:LowCoolantFlow a factory:Symptom,
+        owl:NamedIndividual ;
+    rdfs:label "LowCoolantFlow" .
+
+factory:LowCoolingEfficiency a factory:FailureCause,
+        owl:NamedIndividual ;
+    rdfs:label "LowCoolingEfficiency" ;
+    factory:affectsComponent factory:CoolingSystem ;
+    factory:causesSymptom factory:HighSpindleTemp .
+
+factory:Spindle a factory:Component,
+        owl:NamedIndividual ;
+    rdfs:label "Spindle" ;
+    factory:hasFunction "Rotate tool" ;
+    factory:partOf factory:CNC_Machine_System .
+
+factory:Bearing a factory:Component,
+        owl:NamedIndividual ;
+    rdfs:label "Bearing" ;
+    factory:hasFunction "Support rotation" ;
+    factory:partOf factory:Spindle .
+
+factory:CNC_Machine_System a factory:System,
+        owl:NamedIndividual ;
+    rdfs:label "CNC Milling Machine System" .
+
+factory:Fan a factory:Component,
+        owl:NamedIndividual ;
+    rdfs:label "Fan" ;
+    factory:hasFunction "Air flow" ;
+    factory:partOf factory:CoolingSystem .
+
+factory:Filter a factory:Component,
+        owl:NamedIndividual ;
+    rdfs:label "Filter" ;
+    factory:hasFunction "Filter coolant/air" ;
+    factory:partOf factory:CoolingSystem .
+
+factory:HighSpindleTemp a factory:Symptom,
+        owl:NamedIndividual ;
+    rdfs:label "HighSpindleTemp" .
+
+factory:System a owl:Class .
+
+factory:CoolingSystem a factory:Component,
+        owl:NamedIndividual ;
+    rdfs:label "CoolingSystem" ;
+    factory:hasFunction "Dissipate heat" ;
+    factory:partOf factory:CNC_Machine_System .
+
+factory:Symptom a owl:Class .
+
+factory:MaintenanceProcedure a owl:Class .
+
+factory:FailureCause a owl:Class .
+
+factory:Component a owl:Class .
+
