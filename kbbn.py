@@ -11,8 +11,8 @@ import urllib.parse
 class KnowledgeBase:
     def __init__(self):
         self.g = Graph()
-        self.URI = Namespace("http://factory.tsi.org/ontology#") # base for URI
-        self.g.bind("uri", self.URI)
+        self.base = Namespace("http://factory.tsi.org/ontology#") # base for URI
+        self.g.bind("factory", self.base)
         self.g.bind("owl", OWL)
 
     def _clean_uri(self, text):
@@ -20,7 +20,7 @@ class KnowledgeBase:
             return "Unknown"
         
         clean_text = urllib.parse.quote(str(text).replace(" ", "_"))
-        return self.URI[clean_text]
+        return self.base[clean_text]
     
     def build_graph(self, causes_df, symptoms_df, relations_df, procedures_df, components_df):
         print("Building Knowledge Graph...")
@@ -35,6 +35,49 @@ class KnowledgeBase:
         for _, uri in classes.items():
             self.g.add((uri, RDF.type, OWL.Class))
 
+        # components
+        for _, row in components_df.iterrows():
+            comp_uri = self._clean_uri(row['name'])
+            self.g.add((comp_uri, RDF.type, self.EX.Component))
+            self.g.add((comp_uri, RDFS.label, Literal(row['name'])))
+            
+            if pd.notna(row.get('parent_component')):
+                parent_uri = self._clean_uri(row['parent_component'])
+                self.g.add((comp_uri, self.EX.partOf, parent_uri))
+
+        # causes
+        for _, row in causes_df.iterrows():
+            cause_uri = self._clean_uri(row['name'])
+            self.g.add((cause_uri, RDF.type, self.EX.FailureCause))
+            self.g.add((cause_uri, RDFS.label, Literal(row['name'])))
+
+        # symptoms
+        for _, row in symptoms_df.iterrows():
+            sym_uri = self._clean_uri(row['name'])
+            self.g.add((sym_uri, RDF.type, self.EX.Symptom))
+            self.g.add((sym_uri, RDFS.label, Literal(row['name'])))
+
+        # relations
+        for _, row in relations_df.iterrows():
+            subj = self._clean_uri(row['subj'])
+            pred = self.EX[row['pred']]
+            obj = self._clean_uri(row['obj'])
+            self.g.add((subj, pred, obj))
+
+        # procedures
+        for _, row in procedures_df.iterrows():
+            proc_uri = self._clean_uri(row['name'])
+            self.g.add((proc_uri, RDF.type, self.EX.Procedure))
+            self.g.add((proc_uri, self.EX.cost, Literal(row['spare_parts_cost_eur'], datatype=XSD.float)))
+            self.g.add((proc_uri, self.EX.effort, Literal(row['effort_h'], datatype=XSD.float)))
+            self.g.add((proc_uri, self.EX.risk, Literal(row['risk_rating'], datatype=XSD.integer)))
+            
+            # Link to the cause it mitigates
+            if pd.notna(row.get('mitigates_cause')):
+                cause_uri = self._clean_uri(row['mitigates_cause'])
+                self.g.add((proc_uri, self.EX.mitigates, cause_uri))
+
+        print(f"Graph built with {len(self.g)} triples.")
     def load_from_csv(self, causes_file, procedures_file):
 
 # Organize relevant values, discretize where needed
