@@ -78,12 +78,26 @@ class KnowledgeBase:
                 self.g.add((proc_uri, self.EX.mitigates, cause_uri))
 
         print(f"Graph built with {len(self.g)} triples.")
-    def load_from_csv(self, causes_file, procedures_file):
+
+    # match cause_name to the URI
+    def query_procedures_for_cause(self, cause_name):
+        # TODO
+        return
 
 # Organize relevant values, discretize where needed
 class DataProcessor:
     def __init__(self):
         self.data = None
+    
+    # load telemetry and labels, merging them on timestamp and machine_id
+    def load_and_merge(self, telemetry_file, labels_file):
+        # TODO
+        return
+
+    # discretizes continuous sensor data into discrete state for BN
+    def discretize_for_bn(self, df=None):
+        # TODO (vib_rms, spindle_temp, coolant_flow)
+        return
 
 # Train the Bayesian Network
 class BayesianDiagnoser:
@@ -99,3 +113,6 @@ class BayesianDiagnoser:
 
     def train(delf, df):
         print("Training Bayesian Network...")
+
+# main block
+if __name__ == "__main__":
