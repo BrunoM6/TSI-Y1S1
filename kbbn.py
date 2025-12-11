@@ -7,7 +7,6 @@ from rdflib import Graph, Literal, RDF, RDFS, OWL, Namespace, BNode
 from rdflib.collection import Collection
 from rdflib.namespace import XSD
 
-# Build KB from CSVs
 class KnowledgeBase:
     def __init__(self):
         self.g = Graph()
@@ -178,25 +177,68 @@ class KnowledgeBase:
 
     # match cause_name to the URI
     def query_procedures_for_cause(self, cause_name):
-        # TODO
         return
 
-# Organize relevant values, discretize where needed
 class DataProcessor:
     def __init__(self):
         self.data = None
     
-    # load telemetry and labels, merging them on timestamp and machine_id
     def load_and_merge(self, telemetry_file, labels_file):
-        # TODO
-        return
+        print(f"Loading data from {telemetry_file} and {labels_file}...")
+        
+        df_tel = pd.read_csv(telemetry_file)
+        df_lbl = pd.read_csv(labels_file)
+
+        # converted timestamps for accurate merging
+        df_tel['timestamp'] = pd.to_datetime(df_tel['timestamp'])
+        df_lbl['timestamp'] = pd.to_datetime(df_lbl['timestamp'])
+
+        # Merge on timestamp and machine_id
+        self.data = pd.merge(df_tel, df_lbl, on=['timestamp', 'machine_id'], how='inner')
+        
+        print(f"Merged dataset shape: {self.data.shape}")
+        return self.data
 
     # discretizes continuous sensor data into discrete state for BN
-    def discretize_for_bn(self, df=None):
-        # TODO (vib_rms, spindle_temp, coolant_flow)
-        return
+    def discretize_for_bn(self, df):
+        """
+        Converts continuous sensor columns into discrete states (Low/High/Normal)
+        required by the Bayesian Network structure.
+        """
+        df_discrete = df.copy()
 
-# Train the Bayesian Network
+        # Rename Target Column: 'spindle_overheat' -> 'overheat' (to match BN node name)
+        if 'spindle_overheat' in df_discrete.columns:
+            df_discrete.rename(columns={'spindle_overheat': 'overheat'}, inplace=True)
+
+        # Discretize Vibration
+        # Using quantiles: Bottom 80% = Low, Top 20% = High
+        df_discrete['vibration_state'] = pd.qcut(
+            df_discrete['vibration_rms'], 
+            q=[0, 0.8, 1.0], 
+            labels=['Low', 'High']
+        )
+
+        # Discretize Temperature (spindle_temp -> temp_state)
+        # Using manual threshold: > 70 is High
+        df_discrete['temp_state'] = pd.cut(
+            df_discrete['spindle_temp'], 
+            bins=[-float('inf'), 70, float('inf')], 
+            labels=['Normal', 'High']
+        )
+
+        # Discretize Coolant (coolant_flow -> coolant_state)
+        # Using manual threshold: < 0.95 is Low
+        df_discrete['coolant_state'] = pd.cut(
+            df_discrete['coolant_flow'],
+            bins=[-float('inf'), 0.95, float('inf')],
+            labels=['Low', 'Normal']
+        )
+
+        # Return only the columns needed for the BN
+        cols_to_keep = ['timestamp', 'overheat', 'vibration_state', 'temp_state', 'coolant_state']
+        return df_discrete[cols_to_keep]
+
 class BayesianDiagnoser:
     def __init__(self):
         self.model = BayesianNetwork([
@@ -208,18 +250,30 @@ class BayesianDiagnoser:
         ])
         self.inference = None
 
-    def train(delf, df):
+    def train(self, df):
         print("Training Bayesian Network...")
 
 # main block
 if __name__ == "__main__":
-    KnowledgeBase = KnowledgeBase()
+    kb = KnowledgeBase()
 
-    # Load CSVs
+    # Load CSVs for KG
     df_causes = pd.read_csv('data/causes.csv')
     df_symptoms = pd.read_csv('data/symptoms.csv')
     df_relations = pd.read_csv('data/relations.csv')
     df_procedures = pd.read_csv('data/procedures.csv')
     df_components = pd.read_csv('data/components.csv')
-    KnowledgeBase.build_graph(df_causes, df_symptoms, df_relations, df_procedures, df_components)
-    KnowledgeBase.save_graph("ontology.ttl")
+    
+    kb.build_graph(df_causes, df_symptoms, df_relations, df_procedures, df_components)
+    kb.save_graph("ontology.ttl")
+
+    # Process Data
+    processor = DataProcessor()
+    
+    raw_df = processor.load_and_merge('data/telemetry.csv', 'data/labels.csv')
+    
+    # Create discrete data for the Bayesian Network
+    bn_data = processor.discretize_for_bn(raw_df)
+    
+    print("\nSample of data ready for BN training:")
+    print(bn_data.head())
