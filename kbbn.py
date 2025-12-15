@@ -260,42 +260,37 @@ class DataProcessor:
         df_discrete = df.copy()
 
         # Rename Target Column: 'spindle_overheat' -> 'overheat' (to match BN node name)
-        df_discrete['overheat'] = df['spindle_overheat'].astype(str)
+        df_discrete['overheat'] = df['spindle_overheat'].astype(float)
 
         # Discretize Vibration
         # Using quantiles: Bottom 80% = Low, Top 20% = High
         df_discrete['vibration_state'] = pd.qcut(
-            df_discrete['vibration_rms'], 
+            df_discrete['vibration_rms'],
             q=[0, 0.8, 1.0], 
-            labels=['Low', 'High']
-        )
+            labels=[0, 1] # 0 -> Low, 1 -> High
+        ).astype(float)
 
         # Discretize Temperature (spindle_temp -> temp_state)
         # Using manual threshold: > 70 is High
         df_discrete['temp_state'] = pd.cut(
             df_discrete['spindle_temp'], 
             bins=[-float('inf'), 70, float('inf')], 
-            labels=['Normal', 'High']
-        )
+            labels=[0, 1] # 0 -> Normal, 1 -> High
+        ).astype(float)
 
         # Discretize Coolant (coolant_flow -> coolant_state)
         # Using manual threshold: < 0.95 is Low
         df_discrete['coolant_state'] = pd.cut(
             df_discrete['coolant_flow'],
             bins=[-float('inf'), 0.95, float('inf')],
-            labels=['Low', 'Normal']
-        )
+            labels=[0, 1] # 0 -> Low, 1 -> Normal
+        ).astype(float)
 
-        # Return only the columns needed for the BN
-        cols_to_keep = ['overheat', 'vibration_state', 'temp_state', 'coolant_state']
-
-        # Create and Include hidden vars in df
         latent_vars = ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
         for var in latent_vars:
             df_discrete[var] = np.nan
-        cols_to_keep = ['overheat', 'vibration_state', 'temp_state', 'coolant_state', 
-                        'BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
-        
+
+        cols_to_keep = ['overheat', 'vibration_state', 'temp_state', 'coolant_state'] + latent_vars
         return df_discrete[cols_to_keep]
 
 class BayesianDiagnoser:
@@ -314,16 +309,19 @@ class BayesianDiagnoser:
 
     def train(self, df):
         print("Training Bayesian Network...")
+
         state_names = {
-            'vibration_state': ['Low', 'High'],
-            'temp_state':      ['Normal', 'High'],
-            'coolant_state':   ['Low', 'Normal'],
-            'overheat':        ['0', '1'],
-            'BearingWear':          ['0', '1'],
-            'CloggedFilter':        ['0', '1'],
-            'FanFault':             ['0', '1'],
-            'LowCoolingEfficiency': ['0', '1']
+            'vibration_state':      [0.0, 1.0],
+            'temp_state':           [0.0, 1.0],
+            'coolant_state':        [0.0, 1.0],
+            'overheat':             [0.0, 1.0],
+            
+            'BearingWear':          [0.0, 1.0],
+            'CloggedFilter':        [0.0, 1.0],
+            'FanFault':             [0.0, 1.0],
+            'LowCoolingEfficiency': [0.0, 1.0]
         }
+
         estimator = ExpectationMaximization(self.model, df, state_names=state_names)
 
         latent_card = {k: 2 for k in ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']}
@@ -399,30 +397,33 @@ if __name__ == "__main__":
         print("\n=== SYSTEM DEMO: Diagnosing a Failure ===")
         
         # Scenario: High Vibration, but Coolant is fine (suggests Bearing)
-        obs = {'vibration_state': 'High', 'coolant_state': 'Normal', 'temp_state': 'High'}
+        obs = {'vibration_state': 1.0, 'coolant_state': 1.0, 'temp_state': 1.0}
         print(f"Observation: {obs}")
 
         probs, name_map = diagnoser.diagnose(obs)
         
-        # Sort and Display
         sorted_causes = sorted(probs.items(), key=lambda x: x[1], reverse=True)
         
-        print("\n--- Diagnosis Results ---")
+        print(f"\nDiagnosis Results:")
         for cause, p in sorted_causes:
-            print(f" {cause}: {p:.2%}")
-            
-        top_cause, conf = sorted_causes[0]
+            print(f" - {cause}: {p:.2%}")
+
+        best_cause, confidence = sorted_causes[0]
         
-        if conf > 0.3: # Threshold
-            onto_name = name_map[top_cause]
-            print(f"\nIdentified Root Cause: {onto_name}")
+        if confidence > 0.5:
+            onto_cause = name_map[best_cause]
+            print(f"\nRoot Cause Identified: {onto_cause}")
             
-            actions = kb.query_procedures_for_cause(onto_name)
-            print(f"Recommended Actions ({len(actions)} found):")
-            for a in actions:
-                print(f" -> {a['Procedure']} [Cost: {a['Cost']}€ | Risk: {a['Risk']}]")
+            # Query KG
+            solutions = kb.query_procedures_for_cause(onto_cause)
+            print("\nRecommended Actions:")
+            if solutions:
+                for s in solutions:
+                    print(f" -> {s['Procedure']} (Cost: {s['Cost']}€, Risk: {s['Risk']})")
+            else:
+                print(" -> No procedure found in KG.")
         else:
-            print("\nSystem status unclear.")
-            
+            print("System status ambiguous.")
+
     except Exception as e:
         print(f"\nCRITICAL FAILURE: {e}")
