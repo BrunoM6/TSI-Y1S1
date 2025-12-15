@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from pgmpy.models import BayesianNetwork
+from pgmpy.models import DiscreteBayesianNetwork
 from pgmpy.estimators import ExpectationMaximization
 from pgmpy.inference import VariableElimination
 from rdflib import Graph, Literal, RDF, RDFS, OWL, Namespace, BNode
@@ -177,7 +177,35 @@ class KnowledgeBase:
 
     # match cause_name to the URI
     def query_procedures_for_cause(self, cause_name):
-        return
+        print(f"Querying KG for solutions to: {cause_name}...")
+
+        query = """
+        PREFIX factory: <http://factory.tsi.org/ontology#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        
+        SELECT ?procLabel ?cost ?duration ?risk
+        WHERE {
+            ?proc a factory:MaintenanceProcedure ;
+                  rdfs:label ?procLabel ;
+                  factory:mitigates factory:%s ;
+                  factory:costEuro ?cost ;
+                  factory:durationHours ?duration ;
+                  factory:riskRating ?risk .
+        }
+        """ % cause_name
+        
+        results = self.g.query(query)
+
+        procedures = []
+        for row in results:
+            procedures.append({
+                "Procedure": str(row.procLabel),
+                "Cost": float(row.cost),
+                "Duration": float(row.duration),
+                "Risk": int(row.risk)
+            })
+            
+        return procedures
 
 class DataProcessor:
     def __init__(self):
@@ -199,6 +227,30 @@ class DataProcessor:
         print(f"Merged dataset shape: {self.data.shape}")
         return self.data
 
+    def inject_simulated_failures(self, df):
+            """
+            Updates 'spindle_overheat' to 1 based on CNC physical properties.
+            Since original labels are all 0, we must simulate failures for BN training.
+            """
+            print("Injecting simulated 'Overheat' events based on physics rules...")
+            count_before = df['spindle_overheat'].sum()
+            
+            # Rule 1: Critical Temperature (> 87°C)
+            crit_temp = (df['spindle_temp'] > 87)
+            
+            # Rule 2: High Temp (> 80°C) AND Low Coolant (< 0.35) -> Cooling Failure
+            cooling_fail = (df['spindle_temp'] > 80) & (df['coolant_flow'] < 0.35)
+            
+            # Rule 3: High Temp (> 80°C) AND High Load (> 0.85) AND High Vib (> 1.1) -> Stress Failure
+            stress_fail = (df['spindle_temp'] > 80) & (df['load_pct'] > 0.85) & (df['vibration_rms'] > 1.1)
+            
+            # Apply rules
+            df.loc[crit_temp | cooling_fail | stress_fail, 'spindle_overheat'] = 1
+            
+            count_after = df['spindle_overheat'].sum()
+            print(f"  -> Updated Overheat labels: {count_before} -> {count_after} events.")
+            return df
+
     # discretizes continuous sensor data into discrete state for BN
     def discretize_for_bn(self, df):
         """
@@ -208,8 +260,7 @@ class DataProcessor:
         df_discrete = df.copy()
 
         # Rename Target Column: 'spindle_overheat' -> 'overheat' (to match BN node name)
-        if 'spindle_overheat' in df_discrete.columns:
-            df_discrete.rename(columns={'spindle_overheat': 'overheat'}, inplace=True)
+        df_discrete['overheat'] = df['spindle_overheat'].astype(str)
 
         # Discretize Vibration
         # Using quantiles: Bottom 80% = Low, Top 20% = High
@@ -236,44 +287,142 @@ class DataProcessor:
         )
 
         # Return only the columns needed for the BN
-        cols_to_keep = ['timestamp', 'overheat', 'vibration_state', 'temp_state', 'coolant_state']
+        cols_to_keep = ['overheat', 'vibration_state', 'temp_state', 'coolant_state']
+
+        # Create and Include hidden vars in df
+        latent_vars = ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
+        for var in latent_vars:
+            df_discrete[var] = np.nan
+        cols_to_keep = ['overheat', 'vibration_state', 'temp_state', 'coolant_state', 
+                        'BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
+        
         return df_discrete[cols_to_keep]
 
 class BayesianDiagnoser:
     def __init__(self):
-        self.model = BayesianNetwork([
+        self.model = DiscreteBayesianNetwork([
             ('BearingWear', 'vibration_state'),
-            ('BearingWear', 'overheat'),
             ('CloggedFilter', 'coolant_state'),
+            ('FanFault', 'temp_state'),
+            ('LowCoolingEfficiency', 'temp_state'),
+            ('BearingWear', 'overheat'),
             ('CloggedFilter', 'overheat'),
-            ('overheat', 'temp_state')
+            ('FanFault', 'overheat'),
+            ('LowCoolingEfficiency', 'overheat')
         ])
         self.inference = None
 
     def train(self, df):
         print("Training Bayesian Network...")
+        state_names = {
+            'vibration_state': ['Low', 'High'],
+            'temp_state':      ['Normal', 'High'],
+            'coolant_state':   ['Low', 'Normal'],
+            'overheat':        ['0', '1'],
+            'BearingWear':          ['0', '1'],
+            'CloggedFilter':        ['0', '1'],
+            'FanFault':             ['0', '1'],
+            'LowCoolingEfficiency': ['0', '1']
+        }
+        estimator = ExpectationMaximization(self.model, df, state_names=state_names)
 
+        latent_card = {k: 2 for k in ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']}
+        self.model = estimator.get_parameters(
+            max_iter=10, 
+            latent_card=latent_card
+        )
+
+        self.inference = VariableElimination(self.model)
+
+        print("\n--- Learned Probabilities (CPDs) ---")
+        for cpd in self.model.get_cpds():
+            print(f"Node: {cpd.variable}")
+            print(cpd)
+        print("------------------------------------\n")
+
+    def diagnose(self, evidence):
+            if not self.inference: raise Exception("Model not trained!")
+            
+            cause_map = {
+                'BearingWear': 'BearingWearHigh',
+                'CloggedFilter': 'CloggedFilter',
+                'FanFault': 'FanFault',
+                'LowCoolingEfficiency': 'LowCoolingEfficiency'
+            }
+            
+            results = {}
+            print(f"\nDiagnosing evidence: {evidence}")
+            
+            for bn_cause in cause_map.keys():
+                try:
+                    # Query prob of Cause=1 
+                    q = self.inference.query([bn_cause], evidence=evidence)
+                    prob = q.values[1]
+                    results[bn_cause] = prob
+                except Exception as e:
+                    print(f"  Error querying {bn_cause}: {e}")
+                    results[bn_cause] = 0.0
+                    
+            return results, cause_map
+        
 # main block
 if __name__ == "__main__":
     kb = KnowledgeBase()
 
-    # Load CSVs for KG
-    df_causes = pd.read_csv('data/causes.csv')
-    df_symptoms = pd.read_csv('data/symptoms.csv')
-    df_relations = pd.read_csv('data/relations.csv')
-    df_procedures = pd.read_csv('data/procedures.csv')
-    df_components = pd.read_csv('data/components.csv')
-    
-    kb.build_graph(df_causes, df_symptoms, df_relations, df_procedures, df_components)
-    kb.save_graph("ontology.ttl")
+    try:
+        kb.build_graph(
+            pd.read_csv('data/causes.csv'), pd.read_csv('data/symptoms.csv'),
+            pd.read_csv('data/relations.csv'), pd.read_csv('data/procedures.csv'),
+            pd.read_csv('data/components.csv')
+        )
+        kb.save_graph("ontology.ttl")
 
-    # Process Data
+    except FileNotFoundError:
+        print("Error: CSV files not found in 'data/' directory.")
+
     processor = DataProcessor()
-    
-    raw_df = processor.load_and_merge('data/telemetry.csv', 'data/labels.csv')
-    
-    # Create discrete data for the Bayesian Network
-    bn_data = processor.discretize_for_bn(raw_df)
-    
-    print("\nSample of data ready for BN training:")
-    print(bn_data.head())
+
+    try:
+        raw_df = processor.load_and_merge('data/telemetry.csv', 'data/labels.csv')
+        
+        # INJECT 1 LABELS
+        raw_df = processor.inject_simulated_failures(raw_df)
+        
+        # PREPARE
+        bn_data = processor.discretize_for_bn(raw_df)
+        
+        # TRAIN 
+        diagnoser = BayesianDiagnoser()
+        diagnoser.train(bn_data)
+        
+        # Demo Diagnosis
+        print("\n=== SYSTEM DEMO: Diagnosing a Failure ===")
+        
+        # Scenario: High Vibration, but Coolant is fine (suggests Bearing)
+        obs = {'vibration_state': 'High', 'coolant_state': 'Normal', 'temp_state': 'High'}
+        print(f"Observation: {obs}")
+
+        probs, name_map = diagnoser.diagnose(obs)
+        
+        # Sort and Display
+        sorted_causes = sorted(probs.items(), key=lambda x: x[1], reverse=True)
+        
+        print("\n--- Diagnosis Results ---")
+        for cause, p in sorted_causes:
+            print(f" {cause}: {p:.2%}")
+            
+        top_cause, conf = sorted_causes[0]
+        
+        if conf > 0.3: # Threshold
+            onto_name = name_map[top_cause]
+            print(f"\nIdentified Root Cause: {onto_name}")
+            
+            actions = kb.query_procedures_for_cause(onto_name)
+            print(f"Recommended Actions ({len(actions)} found):")
+            for a in actions:
+                print(f" -> {a['Procedure']} [Cost: {a['Cost']}€ | Risk: {a['Risk']}]")
+        else:
+            print("\nSystem status unclear.")
+            
+    except Exception as e:
+        print(f"\nCRITICAL FAILURE: {e}")
