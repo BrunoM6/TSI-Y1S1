@@ -51,3 +51,12 @@ The following dictionaries were parsed:
 - relations[subject] -> (effect, object)
 - symptoms[symptom_id] = name
 - telemetry[(timestamp, machine_id)] -> (spindle_t, ambient_t, vibration_rms, coolant, feed_rate, spindle_speed, load, power_kw, tool_wear)
+
+## How to run
+Running tests:
+
+`python3 kbbn.py`
+
+Running visualizer dashboard:
+
+`streamlit run dashboard.py`
