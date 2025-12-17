@@ -231,33 +231,61 @@ class DataProcessor:
 
     def inject_simulated_failures(self, df):
             """
-            Updates 'spindle_overheat' to 1 based on CNC physical properties.
+            Updates 'spindle_overheat' to 1 based on CNC physical properties, using Noisy-Or.
             Since original labels are all 0, we must simulate failures for BN training.
             """
             print("Injecting simulated 'Overheat' events based on physics rules...")
             causes = ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
             for c in causes:
                 df[c] = 0.0
-            
+
+            # column of cause, and overheat, are both put at 1, 'prob'/1 times, randomly
+            def apply_probabilistic_fault(mask, cause_col, p=.95):
+                candidates = df.index[mask]
+                chosen = np.random.choice(candidates, size=int(len(candidates) * p), replace=False)
+
+                df.loc[chosen, cause_col] = 1.0
+                df.loc[chosen, 'spindle_overheat'] = 1.0
+
+            # --- Base Rule 0: Spindle Overheat ---
+            # Top 5% of spindle_temp is, 98% of the time, overheat (accounting for sensor errors and temperature spikes)
+            threshold_temp = df['spindle_temp'].quantile(0.95)
+            temp_mask = df['spindle_temp'] > threshold_temp
+            apply_probabilistic_fault(temp_mask, 'overheat', p=0.98)
+
             # --- Rule 1: Fan Fault ---
-            # Logic: Temp is critical (>84), regardless of load/coolant
-            fan_fail_mask = (df['spindle_temp'] > 84)
-            df.loc[fan_fail_mask, 'FanFault'] = 1
-            df.loc[fan_fail_mask, 'spindle_overheat'] = 1
+            # Top 5% of spindle_temp is, 80% of the time, a Fan Fault (accounting for times where it is performance overload)
+            spindle_temp_mask = (df['spindle_temp'] > threshold_temp)
+            apply_probabilistic_fault(spindle_temp_mask, 'FanFault', p=0.8)
             
-            # --- Rule 2: Cooling System Failure ---
-            # Logic: High Temp (>80) AND Low Coolant (<0.35)
-            # We can split this into CloggedFilter or LowEfficiency arbitrarily or randomly
-            cooling_fail_mask = (df['spindle_temp'] > 80) & (df['coolant_flow'] < 0.35)
-            df.loc[cooling_fail_mask, 'CloggedFilter'] = 1
-            df.loc[cooling_fail_mask, 'spindle_overheat'] = 1
+            # --- Rule 2: Clogged Filter ---
+            # Bottom 5% of coolant_flow is, 95% of the time, CloggedFilter (accounting for sensor errors or coolant usage spikes)
+            threshold_coolant = df['coolant_flow'].quantile(0.05)
+            coolant_fail_mask = df['coolant_flow'] < threshold_coolant
+            apply_probabilistic_fault(coolant_fail_mask, 'CloggedFilter', p=0.95)
             
             # --- Rule 3: Bearing Wear ---
-            # Logic: High Temp (>80) AND High Load (>0.85) AND High Vibration (>1.1)
-            stress_fail_mask = (df['spindle_temp'] > 80) & (df['load_pct'] > 0.85) & (df['vibration_rms'] > 1.1)
-            df.loc[stress_fail_mask, 'BearingWear'] = 1
-            df.loc[stress_fail_mask, 'spindle_overheat'] = 1
-            
+            # Top 10% vibration_rms, Top 15% of spindle_temp and Top 25% of load_pct are, 70% of the time, BearingWear (can be machine working hard)
+            threshold_vibration = df['vibration_rms'].quantile(0.90)
+            vibration_mask = df['vibration_rms'] > threshold_vibration
+            threshold_temp = df['spindle_temp'].quantile(0.85)
+            temp_mask = df['spindle_temp'] > threshold_temp
+            threshold_load = df['load_pct'].quantile(0.75)
+            load_mask = df['load_pct'] > threshold_load
+            final_mask = vibration_mask & temp_mask & load_mask
+            apply_probabilistic_fault(final_mask, 'BearingWear', p=0.8)
+
+            # --- Rule 4: Low Cooling Efficiency ---
+            # Top 15% spindle_temperature, top 50% of coolant_flow, bottom 85% of vibration_rms, 60% of the time, LowCoolingEfficiency (might be overworked)
+            threshold_temp = df['spindle_temp'].quantile(0.85)
+            temp_mask = df['spindle_temp'] > threshold_temp
+            threshold_coolant = df['coolant_flow'].quantile(0.50)
+            coolant_fail_mask = df['coolant_flow'] > threshold_coolant
+            threshold_vibration = df['vibration_rms'].quantile(0.15)
+            vibration_mask = df['vibration_rms'] > threshold_vibration
+            final_mask = temp_mask & coolant_fail_mask & vibration_mask
+            apply_probabilistic_fault(final_mask, 'LowCoolingEfficiency', p=0.6)
+
             count = df['spindle_overheat'].sum()
             print(f"  -> Injected {count} failure events across {causes}.")
             return df

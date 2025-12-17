@@ -3,3 +3,4 @@ numpy
 pgmpy
 rdflib
 networkx
+streamlit
