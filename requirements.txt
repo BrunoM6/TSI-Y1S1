@@ -4,3 +4,4 @@ pgmpy
 rdflib
 networkx
 streamlit
+graphviz

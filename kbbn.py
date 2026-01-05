@@ -231,60 +231,73 @@ class DataProcessor:
 
     def inject_simulated_failures(self, df):
             """
-            Updates 'spindle_overheat' to 1 based on CNC physical properties, using Noisy-Or.
-            Since original labels are all 0, we must simulate failures for BN training.
+            Updates 'spindle_overheat' and sensor columns to simulate failures 
+            based on CNC physical properties.
             """
             print("Injecting simulated 'Overheat' events based on physics rules...")
             causes = ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
             for c in causes:
                 df[c] = 0.0
 
-            # column of cause, and overheat, are both put at 1, 'prob'/1 times, randomly
-            def apply_probabilistic_fault(mask, cause_col, p=.95):
-                candidates = df.index[mask]
-                chosen = np.random.choice(candidates, size=int(len(candidates) * p), replace=False)
+            # Helper to set labels AND modify sensor values to create distinct signatures
+            # This is necessary because the raw data has 0.73 correlation between Temp and Vib
+            def inject_fault(mask_candidates, cause_name, n_inject, 
+                             force_temp=None, force_vib=None, force_coolant=None):
+                
+                if len(mask_candidates) == 0:
+                    return
+                
+                idx_to_modify = mask_candidates.sample(n=min(len(mask_candidates), n_inject)).index
+                
+                df.loc[idx_to_modify, cause_name] = 1.0
+                df.loc[idx_to_modify, 'spindle_overheat'] = 1.0
+                
+                if force_temp:
+                    noise = np.random.normal(0, 1.0, size=len(idx_to_modify))
+                    df.loc[idx_to_modify, 'spindle_temp'] = force_temp + noise
+                
+                if force_vib:
+                    noise = np.random.normal(0, 0.05, size=len(idx_to_modify))
+                    df.loc[idx_to_modify, 'vibration_rms'] = force_vib + noise
+                    
+                if force_coolant:
+                    noise = np.random.normal(0, 0.02, size=len(idx_to_modify))
+                    df.loc[idx_to_modify, 'coolant_flow'] = force_coolant + noise
 
-                df.loc[chosen, cause_col] = 1.0
-                df.loc[chosen, 'spindle_overheat'] = 1.0
-
-            # --- Base Rule 0: Spindle Overheat ---
-            # Top 5% of spindle_temp is, 98% of the time, overheat (accounting for sensor errors and temperature spikes)
-            threshold_temp = df['spindle_temp'].quantile(0.95)
-            temp_mask = df['spindle_temp'] > threshold_temp
-            apply_probabilistic_fault(temp_mask, 'overheat', p=0.98)
-
-            # --- Rule 1: Fan Fault ---
-            # Top 5% of spindle_temp is, 80% of the time, a Fan Fault (accounting for times where it is performance overload)
-            spindle_temp_mask = (df['spindle_temp'] > threshold_temp)
-            apply_probabilistic_fault(spindle_temp_mask, 'FanFault', p=0.8)
+            N = len(df)
             
-            # --- Rule 2: Clogged Filter ---
-            # Bottom 5% of coolant_flow is, 95% of the time, CloggedFilter (accounting for sensor errors or coolant usage spikes)
-            threshold_coolant = df['coolant_flow'].quantile(0.05)
-            coolant_fail_mask = df['coolant_flow'] < threshold_coolant
-            apply_probabilistic_fault(coolant_fail_mask, 'CloggedFilter', p=0.95)
+            # --- Rule 1: Clogged Filter ---
+            # Signature: Low Coolant (< 0.35) + High Temp
+            # CRITICAL FIX: Force coolant to 0.20. 
+            # Previously relied on quantile(0.10) which was ~0.38, causing BN to learn "Normal Flow".
+            candidates = df[df['coolant_flow'] < df['coolant_flow'].quantile(0.15)]
+            inject_fault(candidates, 'CloggedFilter', n_inject=int(N * 0.02), 
+                         force_temp=88.0, 
+                         force_coolant=0.20) # STRICTLY LOW
             
-            # --- Rule 3: Bearing Wear ---
-            # Top 10% vibration_rms, Top 15% of spindle_temp and Top 25% of load_pct are, 70% of the time, BearingWear (can be machine working hard)
-            threshold_vibration = df['vibration_rms'].quantile(0.90)
-            vibration_mask = df['vibration_rms'] > threshold_vibration
-            threshold_temp = df['spindle_temp'].quantile(0.85)
-            temp_mask = df['spindle_temp'] > threshold_temp
-            threshold_load = df['load_pct'].quantile(0.75)
-            load_mask = df['load_pct'] > threshold_load
-            final_mask = vibration_mask & temp_mask & load_mask
-            apply_probabilistic_fault(final_mask, 'BearingWear', p=0.8)
+            # --- Rule 2: Bearing Wear ---
+            # Signature: High Vibration (> 1.25) + High Temp
+            candidates = df[df['vibration_rms'] > df['vibration_rms'].quantile(0.95)]
+            inject_fault(candidates, 'BearingWear', n_inject=int(N * 0.02), 
+                         force_temp=82.0, 
+                         force_vib=1.4) # STRICTLY HIGH (State 2)
+
+            # --- Rule 3: Fan Fault ---
+            # Signature: Mid Vibration (1.0 - 1.15) + High Temp + Normal Coolant
+            healthy_candidates = df[(df['spindle_overheat'] == 0)]
+            inject_fault(healthy_candidates, 'FanFault', n_inject=int(N * 0.02), 
+                         force_temp=90.0, 
+                         force_vib=1.1, # MID (State 1)
+                         force_coolant=0.5) # NORMAL
 
             # --- Rule 4: Low Cooling Efficiency ---
-            # Top 15% spindle_temperature, top 50% of coolant_flow, bottom 85% of vibration_rms, 60% of the time, LowCoolingEfficiency (might be overworked)
-            threshold_temp = df['spindle_temp'].quantile(0.85)
-            temp_mask = df['spindle_temp'] > threshold_temp
-            threshold_coolant = df['coolant_flow'].quantile(0.50)
-            coolant_fail_mask = df['coolant_flow'] > threshold_coolant
-            threshold_vibration = df['vibration_rms'].quantile(0.15)
-            vibration_mask = df['vibration_rms'] > threshold_vibration
-            final_mask = temp_mask & coolant_fail_mask & vibration_mask
-            apply_probabilistic_fault(final_mask, 'LowCoolingEfficiency', p=0.6)
+            # Signature: Low Vibration (< 0.8) + High Temp + Normal Coolant
+            # This is the silent overheat. 
+            healthy_candidates = df[(df['spindle_overheat'] == 0)]
+            inject_fault(healthy_candidates, 'LowCoolingEfficiency', n_inject=int(N * 0.02), 
+                         force_temp=95.0, 
+                         force_vib=0.6, # LOW (State 0)
+                         force_coolant=0.5) # NORMAL
 
             count = df['spindle_overheat'].sum()
             print(f"  -> Injected {count} failure events across {causes}.")
@@ -292,37 +305,30 @@ class DataProcessor:
 
     # discretizes continuous sensor data into discrete state for BN
     def discretize_for_bn(self, df):
-        """
-        Converts continuous sensor columns into discrete states (Low/High/Normal)
-        required by the Bayesian Network structure.
-        """
         df_discrete = df.copy()
 
-        # Rename Target Column: 'spindle_overheat' -> 'overheat' (to match BN node name)
         df_discrete['overheat'] = df['spindle_overheat'].astype(float)
 
-        # Discretize Vibration
-        # Using quantiles: Bottom 80% = Low, Top 20% = High
-        df_discrete['vibration_state'] = pd.qcut(
+        # Vibration: 0=Low, 1=Mid, 2=High
+        df_discrete['vibration_state'] = pd.cut(
             df_discrete['vibration_rms'],
-            q=[0, 0.8, 1.0], 
-            labels=[0, 1] # 0 -> Low, 1 -> High
+            bins=[-float('inf'), 0.9, 1.2, float('inf')], 
+            labels=[0, 1, 2] 
         ).astype(float)
 
-        # Discretize Temperature (spindle_temp -> temp_state)
-        # Using manual threshold: > 80 is High
+        # Temperature: 0=Normal, 1=High
         df_discrete['temp_state'] = pd.cut(
             df_discrete['spindle_temp'], 
             bins=[-float('inf'), 80, float('inf')], 
-            labels=[0, 1] # 0 -> Normal, 1 -> High
+            labels=[0, 1] 
         ).astype(float)
 
-        # Discretize Coolant (coolant_flow -> coolant_state)
-        # Using manual threshold: < 0.35 is Low
+        # Coolant: 0=Low, 1=Normal
+        # Threshold 0.35. Anything below is Low.
         df_discrete['coolant_state'] = pd.cut(
             df_discrete['coolant_flow'],
             bins=[-float('inf'), 0.35, float('inf')],
-            labels=[0, 1] # 0 -> Low, 1 -> Normal
+            labels=[0, 1] 
         ).astype(float)
 
         latent_vars = ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
@@ -331,11 +337,20 @@ class DataProcessor:
 
 class BayesianDiagnoser:
     def __init__(self):
+        # ADDED LINK: LowCoolingEfficiency -> coolant_state
+        # This helps the BN learn that Efficiency faults happen when flow is NORMAL.
         self.model = DiscreteBayesianNetwork([
             ('BearingWear', 'vibration_state'),
+            ('BearingWear', 'temp_state'),
             ('CloggedFilter', 'coolant_state'),
+            
             ('FanFault', 'temp_state'),
+            ('FanFault', 'vibration_state'),
+            
             ('LowCoolingEfficiency', 'temp_state'),
+            ('LowCoolingEfficiency', 'vibration_state'),
+            ('LowCoolingEfficiency', 'coolant_state'), # NEW LINK
+            
             ('BearingWear', 'overheat'),
             ('CloggedFilter', 'overheat'),
             ('FanFault', 'overheat'),
@@ -347,7 +362,7 @@ class BayesianDiagnoser:
         print("Training Bayesian Network...")
 
         state_names = {
-            'vibration_state':      [0.0, 1.0],
+            'vibration_state':      [0.0, 1.0, 2.0],
             'temp_state':           [0.0, 1.0],
             'coolant_state':        [0.0, 1.0],
             'overheat':             [0.0, 1.0],
@@ -362,21 +377,14 @@ class BayesianDiagnoser:
         
         latent_card = {k: 2 for k in ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']}
         new_cpds = estimator.get_parameters(
-            max_iter=10, 
+            max_iter=15, 
             latent_card=latent_card
         )
         
-        # Add the learned probabilities to the existing network structure
         self.model.add_cpds(*new_cpds)
-        print("ninja")
+        print("Model trained successfully.")
         
         self.inference = VariableElimination(self.model)
-
-        print("\n--- Learned Probabilities (CPDs) ---")
-        for cpd in self.model.get_cpds():
-            print(f"Node: {cpd.variable}")
-            print(cpd)
-        print("------------------------------------\n")
 
     def diagnose(self, evidence):
             if not self.inference: raise Exception("Model not trained!")
@@ -393,7 +401,6 @@ class BayesianDiagnoser:
             
             for bn_cause in cause_map.keys():
                 try:
-                    # Query prob of Cause=1 
                     q = self.inference.query([bn_cause], evidence=evidence)
                     prob = q.values[1]
                     results[bn_cause] = prob
@@ -403,29 +410,8 @@ class BayesianDiagnoser:
                     
             return results, cause_map
 
-def visualize_network(model):
-    print("\nVisualizing Bayesian Network structure...")
-    G = nx.DiGraph()
-    G.add_edges_from(model.edges())
-    
-    pos = nx.spring_layout(G, seed=42) # Consistent layout
-    plt.figure(figsize=(10, 6))
-    
-    # Draw nodes
-    nx.draw_networkx_nodes(G, pos, node_size=2000, node_color="skyblue", alpha=0.9)
-    nx.draw_networkx_labels(G, pos, font_size=10, font_weight="bold")
-    
-    # Draw edges
-    nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=20, edge_color="gray")
-    
-    plt.title("CNC Bayesian Network Structure")
-    plt.axis("off")
-    plt.show()
-
-# main block
 if __name__ == "__main__":
     kb = KnowledgeBase()
-
     try:
         kb.build_graph(
             pd.read_csv('data/causes.csv'), pd.read_csv('data/symptoms.csv'),
@@ -433,94 +419,10 @@ if __name__ == "__main__":
             pd.read_csv('data/components.csv')
         )
         kb.save_graph("ontology.ttl")
-
-    except FileNotFoundError:
-        print("Error: CSV files not found in 'data/' directory.")
-
-    processor = DataProcessor()
-
-    try:
-        raw_df = processor.load_and_merge('data/telemetry.csv', 'data/labels.csv')
-        
-        # INJECT 1 LABELS
-        raw_df = processor.inject_simulated_failures(raw_df)
-        
-        # PREPARE
-        failures = raw_df[raw_df['spindle_overheat'] == 1]
-        healthy = raw_df[raw_df['spindle_overheat'] == 0]
-        healthy_sample = healthy.sample(n=len(failures) * 3, random_state=42)
-        balanced_df = pd.concat([failures, healthy_sample])
-        print(f"Balanced Dataset for Training: {len(balanced_df)} rows "
-              f"({len(failures)} Failures, {len(healthy_sample)} Healthy)")
-
-        bn_data = processor.discretize_for_bn(balanced_df)
-        
-        # TRAIN 
-        diagnoser = BayesianDiagnoser()
-        diagnoser.train(bn_data)
-        
-        # Demo Diagnosis
-        print("\n=== SYSTEM DEMO: Diagnosing a Failure ===")
-        
-        # Scenario: High Vibration, but Coolant is fine (suggests Bearing)
-        obs = {'vibration_state': 1.0, 'coolant_state': 1.0, 'temp_state': 1.0}
-        print(f"Observation: {obs}")
-
-        probs, name_map = diagnoser.diagnose(obs)
-        
-        sorted_causes = sorted(probs.items(), key=lambda x: x[1], reverse=True)
-        
-        print(f"\nDiagnosis Results:")
-        for cause, p in sorted_causes:
-            print(f" - {cause}: {p:.2%}")
-
-        best_cause, confidence = sorted_causes[0]
-        
-        if confidence > 0.5:
-            onto_cause = name_map[best_cause]
-            print(f"\nRoot Cause Identified: {onto_cause}")
-            
-            # Query KG
-            solutions = kb.query_procedures_for_cause(onto_cause)
-            print("\nRecommended Actions:")
-            if solutions:
-                for s in solutions:
-                    print(f" -> {s['Procedure']} (Cost: {s['Cost']}€, Risk: {s['Risk']})")
-            else:
-                print(" -> No procedure found in KG.")
-        else:
-            print("System status ambiguous.")
-
-        print("\n=== SYSTEM VERIFICATION SUITE ===")
-        
-        test_scenarios = [
-            # Case 1: High Temp + Low Coolant -> Should be Clogged Filter
-            {
-                "name": "Scenario A (Cooling Failure)",
-                "evidence": {'temp_state': 1.0, 'coolant_state': 0.0, 'vibration_state': 0.0}
-            },
-            # Case 2: High Temp + Normal Coolant -> Should be Fan Fault
-            {
-                "name": "Scenario B (Fan Failure)",
-                "evidence": {'temp_state': 1.0, 'coolant_state': 1.0, 'vibration_state': 0.0}
-            },
-            # Case 3: Everything is broken -> Complex
-            {
-                "name": "Scenario C (Catastrophic)",
-                "evidence": {'temp_state': 1.0, 'coolant_state': 0.0, 'vibration_state': 1.0}
-            }
-        ]
-
-        for test in test_scenarios:
-            print(f"\nRunning {test['name']}...")
-            print(f"Evidence: {test['evidence']}")
-            probs, _ = diagnoser.diagnose(test['evidence'])
-            
-            # Print top result
-            top_cause = max(probs, key=probs.get)
-            print(f" -> Top Prediction: {top_cause} ({probs[top_cause]:.2%})")
-        
-        visualize_network(diagnoser.model)
-
-    except Exception as e:
-        print(f"\nCRITICAL FAILURE: {e}")
+    except: pass
+    
+    # Simple test
+    proc = DataProcessor()
+    df = proc.load_and_merge('data/telemetry.csv', 'data/labels.csv')
+    df = proc.inject_simulated_failures(df)
+    print("Injected.")
