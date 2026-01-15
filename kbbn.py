@@ -247,44 +247,40 @@ class DataProcessor:
                 df.loc[chosen, cause_col] = 1.0
                 df.loc[chosen, 'spindle_overheat'] = 1.0
 
-            # --- Base Rule 0: Spindle Overheat ---
-            # Top 5% of spindle_temp is, 98% of the time, overheat (accounting for sensor errors and temperature spikes)
-            threshold_temp = df['spindle_temp'].quantile(0.95)
-            temp_mask = df['spindle_temp'] > threshold_temp
-            apply_probabilistic_fault(temp_mask, 'overheat', p=0.98)
+            # --- Mask 0 : Top 10% of spindle_temp
+            # To diagnose an issue, needs to be at this threshold
+            temp_threshold = df['spindle_temp'].quantile(0.90)
+            temp_mask = df['spindle_temp'] > temp_threshold
 
             # --- Rule 1: Fan Fault ---
-            # Top 5% of spindle_temp is, 80% of the time, a Fan Fault (accounting for times where it is performance overload)
-            spindle_temp_mask = (df['spindle_temp'] > threshold_temp)
-            apply_probabilistic_fault(spindle_temp_mask, 'FanFault', p=0.8)
+            # Top 10% of spindle_temp and Top 25% of ambient_temp are, 95% of the time, a Fan Fault (accounting for times where it is performance overload)
+            ambient_temp_mask = (df['ambient_temp'] > df['ambient_temp'].quantile(0.75))
+            fan_mask = temp_mask & ambient_temp_mask
+            apply_probabilistic_fault(fan_mask, 'FanFault', p=0.95)
             
             # --- Rule 2: Clogged Filter ---
-            # Bottom 5% of coolant_flow is, 95% of the time, CloggedFilter (accounting for sensor errors or coolant usage spikes)
-            threshold_coolant = df['coolant_flow'].quantile(0.05)
+            # Top 10% of spindle_temp, Bottom 10% of coolant_flow is, 95% of the time, CloggedFilter (accounting for sensor errors or coolant usage spikes)
+            threshold_coolant = df['coolant_flow'].quantile(0.10)
             coolant_fail_mask = df['coolant_flow'] < threshold_coolant
             apply_probabilistic_fault(coolant_fail_mask, 'CloggedFilter', p=0.95)
             
             # --- Rule 3: Bearing Wear ---
-            # Top 10% vibration_rms, Top 15% of spindle_temp and Top 25% of load_pct are, 70% of the time, BearingWear (can be machine working hard)
-            threshold_vibration = df['vibration_rms'].quantile(0.90)
+            # Top 10% spindle_temp, Top 15% of vibration_rms and Top 25% of load_pct are, 80% of the time, BearingWear (can be machine working hard)
+            threshold_vibration = df['vibration_rms'].quantile(0.85)
             vibration_mask = df['vibration_rms'] > threshold_vibration
-            threshold_temp = df['spindle_temp'].quantile(0.85)
-            temp_mask = df['spindle_temp'] > threshold_temp
             threshold_load = df['load_pct'].quantile(0.75)
             load_mask = df['load_pct'] > threshold_load
             final_mask = vibration_mask & temp_mask & load_mask
-            apply_probabilistic_fault(final_mask, 'BearingWear', p=0.8)
+            apply_probabilistic_fault(final_mask, 'BearingWear', p=0.98)
 
             # --- Rule 4: Low Cooling Efficiency ---
-            # Top 15% spindle_temperature, top 50% of coolant_flow, bottom 85% of vibration_rms, 60% of the time, LowCoolingEfficiency (might be overworked)
-            threshold_temp = df['spindle_temp'].quantile(0.85)
-            temp_mask = df['spindle_temp'] > threshold_temp
+            # Top 10% spindle_temperature, top 50% of coolant_flow, bottom 85% of vibration_rms, 90% of the time, LowCoolingEfficiency (might be overworked)
             threshold_coolant = df['coolant_flow'].quantile(0.50)
             coolant_fail_mask = df['coolant_flow'] > threshold_coolant
             threshold_vibration = df['vibration_rms'].quantile(0.15)
             vibration_mask = df['vibration_rms'] > threshold_vibration
             final_mask = temp_mask & coolant_fail_mask & vibration_mask
-            apply_probabilistic_fault(final_mask, 'LowCoolingEfficiency', p=0.6)
+            apply_probabilistic_fault(final_mask, 'LowCoolingEfficiency', p=0.90)
 
             count = df['spindle_overheat'].sum()
             print(f"  -> Injected {count} failure events across {causes}.")
@@ -294,52 +290,68 @@ class DataProcessor:
     def discretize_for_bn(self, df):
         """
         Converts continuous sensor columns into discrete states (Low/High/Normal)
-        required by the Bayesian Network structure.
+        required by the Bayesian Network structure for reasoning.
+        Created taking into balance the various possible causes and reasoning needs.
         """
         df_discrete = df.copy()
 
-        # Rename Target Column: 'spindle_overheat' -> 'overheat' (to match BN node name)
-        df_discrete['overheat'] = df['spindle_overheat'].astype(float)
-
-        # Discretize Vibration
-        # Using quantiles: Bottom 80% = Low, Top 20% = High
-        df_discrete['vibration_state'] = pd.qcut(
-            df_discrete['vibration_rms'],
-            q=[0, 0.8, 1.0], 
-            labels=[0, 1] # 0 -> Low, 1 -> High
-        ).astype(float)
-
         # Discretize Temperature (spindle_temp -> temp_state)
-        # Using manual threshold: > 80 is High
+        # Using manual threshold: > 75 is High
         df_discrete['temp_state'] = pd.cut(
             df_discrete['spindle_temp'], 
-            bins=[-float('inf'), 80, float('inf')], 
+            bins=[-float('inf'), 75, float('inf')], 
             labels=[0, 1] # 0 -> Normal, 1 -> High
+        ).astype(float)
+
+        # Discretize Ambient Temperature (ambient_state -> ambient_state)
+        # Using percentile threshold: > 75 is High
+        df_discrete['ambient_state'] = pd.qcut(
+            df_discrete['ambient_temp'], 
+            q=[0.0, 0.75, 1.0], 
+            labels=[0, 1] # 0 -> Normal, 1 -> High
+        ).astype(float)
+
+        # Discretize Vibration
+        # Using quantiles: 0-20 percentile = Low, 20-90 percentile = Middle, 90-100 = High
+        df_discrete['vibration_state'] = pd.qcut(
+            df_discrete['vibration_rms'],
+            q=[0, 0.2, 0.9, 1.0], 
+            labels=[0, 1, 2]
+        ).astype(float)
+
+        # Discretize Load
+        # Using quantiles: 0-75 percentile = Low, 75-100 = High
+        df_discrete['load_state'] = pd.qcut(
+            df_discrete['load_pct'],
+            q=[0, 0.75, 1.0], 
+            labels=[0, 1]
         ).astype(float)
 
         # Discretize Coolant (coolant_flow -> coolant_state)
         # Using manual threshold: < 0.35 is Low
-        df_discrete['coolant_state'] = pd.cut(
+        df_discrete['coolant_state'] = pd.qcut(
             df_discrete['coolant_flow'],
-            bins=[-float('inf'), 0.35, float('inf')],
+            q=[0, 0.10, 1],
             labels=[0, 1] # 0 -> Low, 1 -> Normal
         ).astype(float)
 
         latent_vars = ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
-        cols_to_keep = ['overheat', 'vibration_state', 'temp_state', 'coolant_state'] + latent_vars
+        cols_to_keep = ['ambient_state', 'vibration_state', 'load_state', 'temp_state', 'coolant_state'] + latent_vars
         return df_discrete[cols_to_keep]
 
 class BayesianDiagnoser:
     def __init__(self):
         self.model = DiscreteBayesianNetwork([
+            ('BearingWear', 'load_state'),
             ('BearingWear', 'vibration_state'),
             ('CloggedFilter', 'coolant_state'),
-            ('FanFault', 'temp_state'),
+            ('FanFault', 'ambient_state'),
+            ('LowCoolingEfficiency', 'vibration_state'),
             ('LowCoolingEfficiency', 'temp_state'),
-            ('BearingWear', 'overheat'),
-            ('CloggedFilter', 'overheat'),
-            ('FanFault', 'overheat'),
-            ('LowCoolingEfficiency', 'overheat')
+            ('BearingWear', 'temp_state'),
+            ('CloggedFilter', 'temp_state'),
+            ('FanFault', 'temp_state'),
+            ('LowCoolingEfficiency', 'temp_state')
         ])
         self.inference = None
 
@@ -347,10 +359,11 @@ class BayesianDiagnoser:
         print("Training Bayesian Network...")
 
         state_names = {
-            'vibration_state':      [0.0, 1.0],
+            'vibration_state':      [0.0, 1.0, 2.0],
+            'ambient_state':        [0.0, 1.0],
             'temp_state':           [0.0, 1.0],
             'coolant_state':        [0.0, 1.0],
-            'overheat':             [0.0, 1.0],
+            'load_state':           [0.0, 1.0],
             
             'BearingWear':          [0.0, 1.0],
             'CloggedFilter':        [0.0, 1.0],
@@ -382,11 +395,11 @@ class BayesianDiagnoser:
             if not self.inference: raise Exception("Model not trained!")
             
             cause_map = {
-                'BearingWear': 'BearingWearHigh',
-                'CloggedFilter': 'CloggedFilter',
-                'FanFault': 'FanFault',
-                'LowCoolingEfficiency': 'LowCoolingEfficiency'
-            }
+                    'BearingWear': 'Bearing_Wear', 
+                    'CloggedFilter': 'Clogged_Filter',
+                    'FanFault': 'Fan_Fault',
+                    'LowCoolingEfficiency': 'Low_Cooling_Efficiency'
+                }
             results = {}
 
             print(f"\nDiagnosing evidence: {evidence}")
@@ -448,7 +461,7 @@ if __name__ == "__main__":
         # PREPARE
         failures = raw_df[raw_df['spindle_overheat'] == 1]
         healthy = raw_df[raw_df['spindle_overheat'] == 0]
-        healthy_sample = healthy.sample(n=len(failures) * 3, random_state=42)
+        healthy_sample = healthy.sample(n=len(failures), random_state=42)
         balanced_df = pd.concat([failures, healthy_sample])
         print(f"Balanced Dataset for Training: {len(balanced_df)} rows "
               f"({len(failures)} Failures, {len(healthy_sample)} Healthy)")
@@ -490,36 +503,7 @@ if __name__ == "__main__":
                 print(" -> No procedure found in KG.")
         else:
             print("System status ambiguous.")
-
-        print("\n=== SYSTEM VERIFICATION SUITE ===")
-        
-        test_scenarios = [
-            # Case 1: High Temp + Low Coolant -> Should be Clogged Filter
-            {
-                "name": "Scenario A (Cooling Failure)",
-                "evidence": {'temp_state': 1.0, 'coolant_state': 0.0, 'vibration_state': 0.0}
-            },
-            # Case 2: High Temp + Normal Coolant -> Should be Fan Fault
-            {
-                "name": "Scenario B (Fan Failure)",
-                "evidence": {'temp_state': 1.0, 'coolant_state': 1.0, 'vibration_state': 0.0}
-            },
-            # Case 3: Everything is broken -> Complex
-            {
-                "name": "Scenario C (Catastrophic)",
-                "evidence": {'temp_state': 1.0, 'coolant_state': 0.0, 'vibration_state': 1.0}
-            }
-        ]
-
-        for test in test_scenarios:
-            print(f"\nRunning {test['name']}...")
-            print(f"Evidence: {test['evidence']}")
-            probs, _ = diagnoser.diagnose(test['evidence'])
-            
-            # Print top result
-            top_cause = max(probs, key=probs.get)
-            print(f" -> Top Prediction: {top_cause} ({probs[top_cause]:.2%})")
-        
+ 
         visualize_network(diagnoser.model)
 
     except Exception as e:

@@ -4,3 +4,5 @@ pgmpy
 rdflib
 networkx
 streamlit
+matplotlib
+sklearn
