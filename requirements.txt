@@ -5,4 +5,5 @@ rdflib
 networkx
 streamlit
 matplotlib
-sklearn
+scikit-learn
+seaborn

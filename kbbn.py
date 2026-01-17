@@ -8,6 +8,7 @@ from pgmpy.inference import VariableElimination
 from rdflib import Graph, Literal, RDF, RDFS, OWL, Namespace, BNode
 from rdflib.collection import Collection
 from rdflib.namespace import XSD
+from sklearn.model_selection import train_test_split
 
 class KnowledgeBase:
     def __init__(self):
@@ -22,10 +23,10 @@ class KnowledgeBase:
     def _clean_uri(self, text):
         if pd.isna(text):
             return "Unknown"
-        
+
         clean_text = str(text).replace(" ", "_").strip()
         return self.base[clean_text]
-    
+
     def build_graph(self, df_causes, df_symptoms, df_relations, df_procedures, df_components):
         print("Building Knowledge Graph...")
 
@@ -195,7 +196,7 @@ class KnowledgeBase:
                   factory:riskRating ?risk .
         }
         """ % cause_name
-        
+
         results = self.g.query(query)
 
         procedures = []
@@ -206,16 +207,16 @@ class KnowledgeBase:
                 "Duration": float(row.duration),
                 "Risk": int(row.risk)
             })
-            
+
         return procedures
 
 class DataProcessor:
     def __init__(self):
         self.data = None
-    
+
     def load_and_merge(self, telemetry_file, labels_file):
         print(f"Loading data from {telemetry_file} and {labels_file}...")
-        
+
         df_tel = pd.read_csv(telemetry_file)
         df_lbl = pd.read_csv(labels_file)
 
@@ -225,7 +226,7 @@ class DataProcessor:
 
         # Merge on timestamp and machine_id
         self.data = pd.merge(df_tel, df_lbl, on=['timestamp', 'machine_id'], how='inner')
-        
+
         print(f"Merged dataset shape: {self.data.shape}")
         return self.data
 
@@ -257,13 +258,13 @@ class DataProcessor:
             ambient_temp_mask = (df['ambient_temp'] > df['ambient_temp'].quantile(0.75))
             fan_mask = temp_mask & ambient_temp_mask
             apply_probabilistic_fault(fan_mask, 'FanFault', p=0.95)
-            
+
             # --- Rule 2: Clogged Filter ---
             # Top 10% of spindle_temp, Bottom 10% of coolant_flow is, 95% of the time, CloggedFilter (accounting for sensor errors or coolant usage spikes)
             threshold_coolant = df['coolant_flow'].quantile(0.10)
             coolant_fail_mask = df['coolant_flow'] < threshold_coolant
             apply_probabilistic_fault(coolant_fail_mask, 'CloggedFilter', p=0.95)
-            
+
             # --- Rule 3: Bearing Wear ---
             # Top 10% spindle_temp, Top 15% of vibration_rms and Top 25% of load_pct are, 80% of the time, BearingWear (can be machine working hard)
             threshold_vibration = df['vibration_rms'].quantile(0.85)
@@ -298,16 +299,16 @@ class DataProcessor:
         # Discretize Temperature (spindle_temp -> temp_state)
         # Using manual threshold: > 75 is High
         df_discrete['temp_state'] = pd.cut(
-            df_discrete['spindle_temp'], 
-            bins=[-float('inf'), 75, float('inf')], 
+            df_discrete['spindle_temp'],
+            bins=[-float('inf'), 75, float('inf')],
             labels=[0, 1] # 0 -> Normal, 1 -> High
         ).astype(float)
 
         # Discretize Ambient Temperature (ambient_state -> ambient_state)
         # Using percentile threshold: > 75 is High
         df_discrete['ambient_state'] = pd.qcut(
-            df_discrete['ambient_temp'], 
-            q=[0.0, 0.75, 1.0], 
+            df_discrete['ambient_temp'],
+            q=[0.0, 0.75, 1.0],
             labels=[0, 1] # 0 -> Normal, 1 -> High
         ).astype(float)
 
@@ -315,7 +316,7 @@ class DataProcessor:
         # Using quantiles: 0-20 percentile = Low, 20-90 percentile = Middle, 90-100 = High
         df_discrete['vibration_state'] = pd.qcut(
             df_discrete['vibration_rms'],
-            q=[0, 0.2, 0.9, 1.0], 
+            q=[0, 0.2, 0.9, 1.0],
             labels=[0, 1, 2]
         ).astype(float)
 
@@ -323,7 +324,7 @@ class DataProcessor:
         # Using quantiles: 0-75 percentile = Low, 75-100 = High
         df_discrete['load_state'] = pd.qcut(
             df_discrete['load_pct'],
-            q=[0, 0.75, 1.0], 
+            q=[0, 0.75, 1.0],
             labels=[0, 1]
         ).astype(float)
 
@@ -364,25 +365,25 @@ class BayesianDiagnoser:
             'temp_state':           [0.0, 1.0],
             'coolant_state':        [0.0, 1.0],
             'load_state':           [0.0, 1.0],
-            
+
             'BearingWear':          [0.0, 1.0],
             'CloggedFilter':        [0.0, 1.0],
             'FanFault':             [0.0, 1.0],
             'LowCoolingEfficiency': [0.0, 1.0]
         }
-        
+
         estimator = ExpectationMaximization(self.model, df, state_names=state_names)
-        
+
         latent_card = {k: 2 for k in ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']}
         new_cpds = estimator.get_parameters(
-            max_iter=10, 
+            max_iter=10,
             latent_card=latent_card
         )
-        
+
         # Add the learned probabilities to the existing network structure
         self.model.add_cpds(*new_cpds)
         print("ninja")
-        
+
         self.inference = VariableElimination(self.model)
 
         print("\n--- Learned Probabilities (CPDs) ---")
@@ -393,44 +394,44 @@ class BayesianDiagnoser:
 
     def diagnose(self, evidence):
             if not self.inference: raise Exception("Model not trained!")
-            
+
             cause_map = {
-                    'BearingWear': 'Bearing_Wear', 
-                    'CloggedFilter': 'Clogged_Filter',
-                    'FanFault': 'Fan_Fault',
-                    'LowCoolingEfficiency': 'Low_Cooling_Efficiency'
+                    'BearingWear': 'BearingWearHigh',
+                    'CloggedFilter': 'CloggedFilter',
+                    'FanFault': 'FanFault',
+                    'LowCoolingEfficiency': 'LowCoolingEfficiency'
                 }
             results = {}
 
             print(f"\nDiagnosing evidence: {evidence}")
-            
+
             for bn_cause in cause_map.keys():
                 try:
-                    # Query prob of Cause=1 
+                    # Query prob of Cause=1
                     q = self.inference.query([bn_cause], evidence=evidence)
                     prob = q.values[1]
                     results[bn_cause] = prob
                 except Exception as e:
                     print(f"  Error querying {bn_cause}: {e}")
                     results[bn_cause] = 0.0
-                    
+
             return results, cause_map
 
 def visualize_network(model):
     print("\nVisualizing Bayesian Network structure...")
     G = nx.DiGraph()
     G.add_edges_from(model.edges())
-    
+
     pos = nx.spring_layout(G, seed=42) # Consistent layout
     plt.figure(figsize=(10, 6))
-    
+
     # Draw nodes
     nx.draw_networkx_nodes(G, pos, node_size=2000, node_color="skyblue", alpha=0.9)
     nx.draw_networkx_labels(G, pos, font_size=10, font_weight="bold")
-    
+
     # Draw edges
     nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=20, edge_color="gray")
-    
+
     plt.title("CNC Bayesian Network Structure")
     plt.axis("off")
     plt.show()
@@ -454,45 +455,59 @@ if __name__ == "__main__":
 
     try:
         raw_df = processor.load_and_merge('data/telemetry.csv', 'data/labels.csv')
-        
-        # INJECT 1 LABELS
-        raw_df = processor.inject_simulated_failures(raw_df)
-        
-        # PREPARE
-        failures = raw_df[raw_df['spindle_overheat'] == 1]
-        healthy = raw_df[raw_df['spindle_overheat'] == 0]
-        healthy_sample = healthy.sample(n=len(failures), random_state=42)
-        balanced_df = pd.concat([failures, healthy_sample])
-        print(f"Balanced Dataset for Training: {len(balanced_df)} rows "
-              f"({len(failures)} Failures, {len(healthy_sample)} Healthy)")
 
-        bn_data = processor.discretize_for_bn(balanced_df)
-        
-        # TRAIN 
+        # Inject simulated failures based on physical rules
+        raw_df = processor.inject_simulated_failures(raw_df)
+
+        # Train test split (stratified on target to keep failure ratio)
+        train_df, test_df = train_test_split(
+            raw_df,
+            test_size=0.2,
+            random_state=42,
+            stratify=raw_df['spindle_overheat']
+        )
+
+        print(f"Train set: {len(train_df)} rows ({train_df['spindle_overheat'].sum()} failures)")
+        print(f"Test set: {len(test_df)} rows ({test_df['spindle_overheat'].sum()} failures)")
+
+        # Balance the training set (equal failures and non-failures)
+        train_failures = train_df[train_df['spindle_overheat'] == 1]
+        train_healthy = train_df[train_df['spindle_overheat'] == 0]
+        train_healthy_sample = train_healthy.sample(n=len(train_failures), random_state=42)
+        train_balanced = pd.concat([train_failures, train_healthy_sample])
+
+        print(f"\nBalanced train set: {len(train_balanced)} rows "
+              f"({len(train_failures)} failures, {len(train_healthy_sample)} healthy)")
+
+        # Discretize for Bayesian Network
+        train_bn = processor.discretize_for_bn(train_balanced)
+        test_bn = processor.discretize_for_bn(test_df)
+
+        # Train Bayesian Network
         diagnoser = BayesianDiagnoser()
-        diagnoser.train(bn_data)
-        
+        diagnoser.train(train_bn)
+
         # Demo Diagnosis
-        print("\n=== SYSTEM DEMO: Diagnosing a Failure ===")
-        
+        print("\nSYSTEM DEMO: Diagnosing a Failure")
+
         # Scenario: High Vibration, but Coolant is fine (suggests Bearing)
-        obs = {'vibration_state': 1.0, 'coolant_state': 1.0, 'temp_state': 1.0}
+        obs = {'vibration_state': 2.0, 'coolant_state': 1.0, 'temp_state': 1.0}
         print(f"Observation: {obs}")
 
         probs, name_map = diagnoser.diagnose(obs)
-        
+
         sorted_causes = sorted(probs.items(), key=lambda x: x[1], reverse=True)
-        
+
         print(f"\nDiagnosis Results:")
         for cause, p in sorted_causes:
             print(f" - {cause}: {p:.2%}")
 
         best_cause, confidence = sorted_causes[0]
-        
+
         if confidence > 0.5:
             onto_cause = name_map[best_cause]
             print(f"\nRoot Cause Identified: {onto_cause}")
-            
+
             # Query KG
             solutions = kb.query_procedures_for_cause(onto_cause)
             print("\nRecommended Actions:")
@@ -503,8 +518,22 @@ if __name__ == "__main__":
                 print(" -> No procedure found in KG.")
         else:
             print("System status ambiguous.")
- 
+
         visualize_network(diagnoser.model)
+
+        # Evaluate Network on test set
+        print("\n\nEvaluating Bayesian Network")
+
+        from evaluation import evaluate
+
+        # Set acceptable probability threshold to 0.3 due to imbalanced data
+        test_results = evaluate(
+            diagnoser=diagnoser,
+            bn_df=test_bn,
+            prob_threshold=0.3
+        )
+
+        test_results.to_csv('results/test_evaluation_results.csv', index=False)
 
     except Exception as e:
         print(f"\nCRITICAL FAILURE: {e}")

@@ -225,10 +225,10 @@ top_cause, confidence = sorted_causes[0]
 
 # Correct mapping from BN cause names to Knowledge Graph cause names
 bn_to_kg_mapping = {
-    'BearingWear': 'Bearing_Wear',
-    'CloggedFilter': 'Clogged_Filter', 
-    'FanFault': 'Fan_Fault',
-    'LowCoolingEfficiency': 'Low_Cooling_Efficiency'
+    'BearingWear': 'BearingWearHigh',
+    'CloggedFilter': 'CloggedFilter',
+    'FanFault': 'FanFault',
+    'LowCoolingEfficiency': 'LowCoolingEfficiency'
 }
 
 # Display Results
@@ -263,7 +263,7 @@ with col_right:
         
         if solutions:
             st.success("**Recommended Maintenance Actions:**")
-            
+
             # Display each solution
             for idx, sol in enumerate(solutions, 1):
                 with st.container():
