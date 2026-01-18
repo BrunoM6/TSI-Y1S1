@@ -9,7 +9,7 @@ import os
 
 def evaluate(diagnoser: BayesianDiagnoser, bn_df: pd.DataFrame, prob_threshold: float = 0.3):
     """
-    Evaluate Bayesian Network on bn_df using multi-label approach.
+    Evaluate Bayesian Network on bn_df for each latent variable.
 
     Args:
         diagnoser: Trained BayesianDiagnoser
@@ -130,7 +130,6 @@ def cross_validate(raw_df: pd.DataFrame,
                    random_state: int = 42):
     """
     Performs stratified k-fold cross-validation on the entire dataset.
-    Returns aggregated metrics across all folds.
 
     Args:
         raw_df: Raw dataframe with injected failures

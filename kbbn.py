@@ -21,6 +21,9 @@ class KnowledgeBase:
         self.g.add((self.base[''], RDFS.label, Literal("TSI Project Ontology")))
 
     def _clean_uri(self, text):
+        """
+        Cleans text to create a valid URI in the ontology.
+        """
         if pd.isna(text):
             return "Unknown"
 
@@ -28,6 +31,16 @@ class KnowledgeBase:
         return self.base[clean_text]
 
     def build_graph(self, df_causes, df_symptoms, df_relations, df_procedures, df_components):
+        """
+        Builds the knowledge graph from provided dataframes.
+
+        Args:
+            df_causes: DataFrame of failure causes
+            df_symptoms: DataFrame of symptoms
+            df_relations: DataFrame of relations between causes, symptoms, components
+            df_procedures: DataFrame of maintenance procedures
+            df_components: DataFrame of machine components
+        """
         print("Building Knowledge Graph...")
 
         # Start by defining classes
@@ -175,11 +188,23 @@ class KnowledgeBase:
 
     # Method to store generated graph to ttl file
     def save_graph(self, output_file="ontology.ttl"):
+        """
+        Saves the knowledge graph to a Turtle (.ttl) file.
+        """
         self.g.serialize(destination=output_file, format='turtle')
         print(f"Knowledge Graph saved to {output_file}")
 
     # match cause_name to the URI
     def query_procedures_for_cause(self, cause_name):
+        """
+        Queries the knowledge graph for maintenance procedures that mitigate the given cause.
+
+        Args:
+            cause_name: Name of the failure cause (string)
+
+        Returns:
+            List of dictionaries with procedure details (name, cost, duration, risk)
+        """
         print(f"Querying KG for solutions to: {cause_name}...")
 
         query = """
@@ -215,6 +240,16 @@ class DataProcessor:
         self.data = None
 
     def load_and_merge(self, telemetry_file, labels_file):
+        """
+        Loads telemetry and labels CSV files, merges them on timestamp and machine_id.
+
+        Args:
+            telemetry_file: Path to telemetry CSV file
+            labels_file: Path to labels CSV file
+
+        Returns:
+            Merged DataFrame
+        """
         print(f"Loading data from {telemetry_file} and {labels_file}...")
 
         df_tel = pd.read_csv(telemetry_file)
@@ -361,6 +396,9 @@ class BayesianDiagnoser:
         self.inference = None
 
     def train(self, df):
+        """
+        Trains the Bayesian Network using the provided DataFrame.
+        """
         print("Training Bayesian Network...")
 
         state_names = {
@@ -397,31 +435,47 @@ class BayesianDiagnoser:
         print("------------------------------------\n")
 
     def diagnose(self, evidence):
-            if not self.inference: raise Exception("Model not trained!")
+        """
+        Performs diagnosis given observed evidence.
 
-            cause_map = {
-                    'BearingWear': 'BearingWearHigh',
-                    'CloggedFilter': 'CloggedFilter',
-                    'FanFault': 'FanFault',
-                    'LowCoolingEfficiency': 'LowCoolingEfficiency'
-                }
-            results = {}
+        Args:
+            evidence: Dictionary of observed sensor states
 
-            print(f"\nDiagnosing evidence: {evidence}")
+        Returns:
+            results: Dictionary of cause probabilities
+            cause_map: Mapping of BN cause names to ontology cause names
+        """
+        if not self.inference: raise Exception("Model not trained!")
 
-            for bn_cause in cause_map.keys():
-                try:
-                    # Query prob of Cause=1
-                    q = self.inference.query([bn_cause], evidence=evidence)
-                    prob = q.values[1]
-                    results[bn_cause] = prob
-                except Exception as e:
-                    print(f"Error querying {bn_cause}: {e}")
-                    results[bn_cause] = 0.0
+        cause_map = {
+                'BearingWear': 'BearingWearHigh',
+                'CloggedFilter': 'CloggedFilter',
+                'FanFault': 'FanFault',
+                'LowCoolingEfficiency': 'LowCoolingEfficiency'
+            }
+        results = {}
 
-            return results, cause_map
+        print(f"\nDiagnosing evidence: {evidence}")
+
+        for bn_cause in cause_map.keys():
+            try:
+                # Query prob of Cause=1
+                q = self.inference.query([bn_cause], evidence=evidence)
+                prob = q.values[1]
+                results[bn_cause] = prob
+            except Exception as e:
+                print(f"Error querying {bn_cause}: {e}")
+                results[bn_cause] = 0.0
+
+        return results, cause_map
 
 def visualize_network(model):
+    """
+    Visualizes the Bayesian Network structure using NetworkX and Matplotlib.
+
+    Args:
+        model: Trained DiscreteBayesianNetwork
+    """
     print("\nVisualizing Bayesian Network structure...")
     G = nx.DiGraph()
     G.add_edges_from(model.edges())
