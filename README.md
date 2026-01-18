@@ -43,16 +43,16 @@ Defines the static entities, taxonomy and attributes of the industrial domain.
 Integrates the dataset by defining semantic connections:
 
 - **relations.csv**: Encodes expert domain knowledge by mapping dependencies between files.
-    - Usage: Establishes edges in the Knowledge Graph (e.g., Cause -> Symptom), transofrming isolated data points into a connected network of information.
+    - Usage: Establishes edges in the Knowledge Graph (e.g., Cause -> Symptom), transforming isolated data points into a connected network of information.
 
 #### Data Structures Created
-A DataFrame for each .csv file was created, directly with the `pd.to_csv()` function.
+A DataFrame for each .csv file was created, directly with the `pd.read_csv()` function.
 
 The following dictionaries were parsed:
 - causes[cause_id] -> name
 - components[components_id] -> (name, parent, function)
 - labels[(timestamp, machine_id)] -> (overheat)
-- maintenance[(timestamp, machine_id)] -> (action, duration, sucess)
+- maintenance[(timestamp, machine_id)] -> (action, duration, success)
 - procedures[procedure_id] -> (target, mitigates, effort, cost, risk)
 - relations[subject] -> (effect, object)
 - symptoms[symptom_id] = name
