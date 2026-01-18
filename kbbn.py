@@ -236,6 +236,10 @@ class DataProcessor:
             Since original labels are all 0, we must simulate failures for BN training.
             """
             print("Injecting simulated 'Overheat' events based on physics rules...")
+
+            # Set random seed for reproducibility
+            np.random.seed(42)
+
             causes = ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
             for c in causes:
                 df[c] = 0.0
@@ -284,7 +288,7 @@ class DataProcessor:
             apply_probabilistic_fault(final_mask, 'LowCoolingEfficiency', p=0.90)
 
             count = df['spindle_overheat'].sum()
-            print(f"  -> Injected {count} failure events across {causes}.")
+            print(f"Injected {count} failure events across {causes}.")
             return df
 
     # discretizes continuous sensor data into discrete state for BN
@@ -377,12 +381,12 @@ class BayesianDiagnoser:
         latent_card = {k: 2 for k in ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']}
         new_cpds = estimator.get_parameters(
             max_iter=10,
-            latent_card=latent_card
+            latent_card=latent_card,
+            seed=42
         )
 
         # Add the learned probabilities to the existing network structure
         self.model.add_cpds(*new_cpds)
-        print("ninja")
 
         self.inference = VariableElimination(self.model)
 
@@ -412,7 +416,7 @@ class BayesianDiagnoser:
                     prob = q.values[1]
                     results[bn_cause] = prob
                 except Exception as e:
-                    print(f"  Error querying {bn_cause}: {e}")
+                    print(f"Error querying {bn_cause}: {e}")
                     results[bn_cause] = 0.0
 
             return results, cause_map
@@ -438,6 +442,9 @@ def visualize_network(model):
 
 # main block
 if __name__ == "__main__":
+    # Set global random seed for reproducibility
+    np.random.seed(42)
+
     kb = KnowledgeBase()
 
     try:
@@ -513,9 +520,9 @@ if __name__ == "__main__":
             print("\nRecommended Actions:")
             if solutions:
                 for s in solutions:
-                    print(f" -> {s['Procedure']} (Cost: {s['Cost']}€, Risk: {s['Risk']})")
+                    print(f"{s['Procedure']} (Cost: {s['Cost']}€, Risk: {s['Risk']})")
             else:
-                print(" -> No procedure found in KG.")
+                print("No procedure found in KG.")
         else:
             print("System status ambiguous.")
 

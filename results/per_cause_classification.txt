@@ -3,40 +3,40 @@ Results per Cause
 Cause: BearingWear
               precision    recall  f1-score   support
 
-      Normal       1.00      0.96      0.98     20161
-       Fault       0.44      1.00      0.61       575
+      Normal       1.00      0.96      0.98     20157
+       Fault       0.44      1.00      0.61       579
 
-    accuracy                           0.97     20736
+    accuracy                           0.96     20736
    macro avg       0.72      0.98      0.80     20736
-weighted avg       0.98      0.97      0.97     20736
+weighted avg       0.98      0.96      0.97     20736
 
 Cause: CloggedFilter
               precision    recall  f1-score   support
 
-      Normal       1.00      0.99      0.99     18800
-       Fault       0.87      1.00      0.93      1936
+      Normal       1.00      0.98      0.99     18843
+       Fault       0.86      1.00      0.92      1893
 
-    accuracy                           0.99     20736
-   macro avg       0.94      0.99      0.96     20736
-weighted avg       0.99      0.99      0.99     20736
+    accuracy                           0.98     20736
+   macro avg       0.93      0.99      0.96     20736
+weighted avg       0.99      0.98      0.99     20736
 
 Cause: FanFault
               precision    recall  f1-score   support
 
-      Normal       1.00      0.98      0.99     19891
-       Fault       0.73      0.99      0.84       845
+      Normal       1.00      0.98      0.99     19873
+       Fault       0.74      0.98      0.84       863
 
     accuracy                           0.98     20736
-   macro avg       0.87      0.99      0.92     20736
+   macro avg       0.87      0.98      0.92     20736
 weighted avg       0.99      0.98      0.99     20736
 
 Cause: LowCoolingEfficiency
               precision    recall  f1-score   support
 
-      Normal       0.97      0.94      0.96     19891
-       Fault       0.22      0.42      0.29       845
+      Normal       0.98      0.94      0.96     19905
+       Fault       0.23      0.44      0.30       831
 
     accuracy                           0.92     20736
-   macro avg       0.60      0.68      0.62     20736
-weighted avg       0.94      0.92      0.93     20736
+   macro avg       0.60      0.69      0.63     20736
+weighted avg       0.95      0.92      0.93     20736
 

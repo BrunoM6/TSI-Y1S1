@@ -76,7 +76,7 @@ def evaluate(diagnoser: BayesianDiagnoser, bn_df: pd.DataFrame, prob_threshold: 
                         yticklabels=['Normal', 'Fault'])
             plt.xlabel("Predicted")
             plt.ylabel("True")
-            plt.title(f"Confusion Matrix: {c} (threshold = {prob_threshold})")
+            plt.suptitle(f"Confusion Matrix: {c} (threshold = {prob_threshold})", y=0.95)
             plt.tight_layout()
 
             # Save confusion matrix
