@@ -1,5 +1,8 @@
 # Project - TSI
-**Made by**: Bruno Moreira, Tiago Sousa and João Lamas
+**Made by**:
+- Bruno Moreira (up202107143@up.pt)
+- João Lamas (up202208948@up.pt)
+- Tiago Gonçalves (up202205081@up.pt)
 
 Project done in the context of the Topics on Intelligent Systems class at FEUP.
 
