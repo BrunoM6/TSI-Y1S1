@@ -529,18 +529,46 @@ if __name__ == "__main__":
         visualize_network(diagnoser.model)
 
         # Evaluate Network on test set
-        print("\n\nEvaluating Bayesian Network")
+        print("\n\nEvaluating Bayesian Network (0.3 Confidence Threshold - Moderate)")
 
-        from evaluation import evaluate
+        from evaluation import evaluate, cross_validate
 
-        # Set acceptable probability threshold to 0.3 due to imbalanced data
-        test_results = evaluate(
+        # Evaluate at high (0.6) and moderate (0.3) confidence thresholds
+        evaluate(
             diagnoser=diagnoser,
             bn_df=test_bn,
             prob_threshold=0.3
         )
 
-        test_results.to_csv('results/test_evaluation_results.csv', index=False)
+        print("\n\nEvaluating Bayesian Network (0.6 Confidence Threshold - High)")
+
+        evaluate(
+            diagnoser=diagnoser,
+            bn_df=test_bn,
+            prob_threshold=0.6
+        )
+
+        # Cross-Validation (same thresholds)
+        print("\n\nPerforming 5-Fold Cross-Validation (0.3 Confidence Threshold - Moderate)")
+
+        cross_validate(
+            raw_df=raw_df,
+            processor=processor,
+            n_splits=5,
+            prob_threshold=0.3,
+            random_state=42
+        )
+
+        print("\n\nPerforming 5-Fold Cross-Validation (0.6 Confidence Threshold - High)")
+
+        cross_validate(
+            raw_df=raw_df,
+            processor=processor,
+            n_splits=5,
+            prob_threshold=0.6,
+            random_state=42
+        )
+
 
     except Exception as e:
         print(f"\nCRITICAL FAILURE: {e}")

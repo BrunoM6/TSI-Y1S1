@@ -1,0 +1,5 @@
+cause,precision_mean,precision_std,recall_mean,recall_std,f1_mean,f1_std
+BearingWear,0.435,0.009,0.997,0.004,0.606,0.009
+CloggedFilter,0.874,0.017,1.0,0.0,0.933,0.009
+FanFault,0.726,0.009,0.994,0.008,0.839,0.007
+LowCoolingEfficiency,0.223,0.013,0.432,0.02,0.294,0.016

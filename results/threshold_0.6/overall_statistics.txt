@@ -1,0 +1,6 @@
+Overall Statistics:
+
+Total true fault instances: 4166
+Total predicted fault instances: 4509
+Dataset size: 20736 rows
+Classification threshold: 0.6

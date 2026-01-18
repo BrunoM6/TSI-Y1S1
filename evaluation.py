@@ -1,10 +1,11 @@
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, classification_report
-from kbbn import BayesianDiagnoser
+from sklearn.metrics import confusion_matrix, classification_report, precision_recall_fscore_support
+from sklearn.model_selection import StratifiedKFold
+from kbbn import BayesianDiagnoser, DataProcessor
 import os
-
 
 def evaluate(diagnoser: BayesianDiagnoser, bn_df: pd.DataFrame, prob_threshold: float = 0.3):
     """
@@ -13,10 +14,17 @@ def evaluate(diagnoser: BayesianDiagnoser, bn_df: pd.DataFrame, prob_threshold: 
     Args:
         diagnoser: Trained BayesianDiagnoser
         bn_df: Test dataset (discretized)
-        prob_threshold: Classification threshold (use 0.3 for imbalanced data)
+        prob_threshold: Classification threshold (either moderate 0.3 or conservative 0.6)
     """
     if diagnoser.inference is None:
         raise RuntimeError("Diagnoser not trained.")
+
+    # Create output directory
+    output_dir = 'results'
+    sub_dir = f'threshold_{prob_threshold}'
+    os.makedirs(output_dir, exist_ok=True)
+    output_dir = os.path.join(output_dir, sub_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     # Define latent and observed variables
     latent_vars = ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
@@ -80,8 +88,6 @@ def evaluate(diagnoser: BayesianDiagnoser, bn_df: pd.DataFrame, prob_threshold: 
             plt.tight_layout()
 
             # Save confusion matrix
-            output_dir = 'results'
-            os.makedirs(output_dir, exist_ok=True)
             plt.savefig(f'{output_dir}/confusion_matrix_{c}.png')
 
             plt.show()
@@ -95,10 +101,6 @@ def evaluate(diagnoser: BayesianDiagnoser, bn_df: pd.DataFrame, prob_threshold: 
     print(f"Total predicted fault instances: {total_pred_faults}")
     print(f"Dataset size: {len(bn_df)} rows")
     print(f"Used Threshold: {prob_threshold}")
-
-    # Save results
-    output_dir = 'results'
-    os.makedirs(output_dir, exist_ok=True)
 
     # Save per-cause results
     with open(f'{output_dir}/per_cause_classification.txt', 'w') as f:
@@ -116,6 +118,146 @@ def evaluate(diagnoser: BayesianDiagnoser, bn_df: pd.DataFrame, prob_threshold: 
         f.write(f"Dataset size: {len(bn_df)} rows\n")
         f.write(f"Classification threshold: {prob_threshold}\n")
 
+    # Save predictions
+    pred_df.to_csv(f'{output_dir}/predictions.csv', index=False)
     print(f"\nResults saved to '{output_dir}/' directory")
 
-    return pred_df
+
+def cross_validate(raw_df: pd.DataFrame,
+                   processor: DataProcessor,
+                   n_splits: int = 5,
+                   prob_threshold: float = 0.3,
+                   random_state: int = 42):
+    """
+    Performs stratified k-fold cross-validation on the entire dataset.
+    Returns aggregated metrics across all folds.
+
+    Args:
+        raw_df: Raw dataframe with injected failures
+        processor: DataProcessor instance for discretization
+        n_splits: Number of CV folds
+        prob_threshold: Classification threshold (either moderate 0.3 or conservative 0.6)
+        random_state: Random seed
+    """
+    np.random.seed(random_state)
+
+    latent_vars = ['BearingWear', 'CloggedFilter', 'FanFault', 'LowCoolingEfficiency']
+    obs_cols = ['ambient_state', 'vibration_state', 'load_state', 'temp_state', 'coolant_state']
+
+    # Store metrics per fold
+    fold_metrics = []
+
+    # Stratified split by target
+    y = raw_df['spindle_overheat'].astype(int).values
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+    for fold_idx, (train_idx, test_idx) in enumerate(skf.split(raw_df, y), start=1):
+        print(f"\n--- Fold {fold_idx}/{n_splits} ---")
+
+        train_df = raw_df.iloc[train_idx].copy()
+        test_df = raw_df.iloc[test_idx].copy()
+
+        # Balance training fold
+        train_fail = train_df[train_df['spindle_overheat'] == 1]
+        train_healthy = train_df[train_df['spindle_overheat'] == 0]
+        healthy_sample = train_healthy.sample(n=len(train_fail), random_state=random_state)
+        train_balanced = pd.concat([train_fail, healthy_sample])
+
+        print(f"Train: {len(train_balanced)} ({len(train_fail)} failures)")
+        print(f"Test: {len(test_df)} ({test_df['spindle_overheat'].sum()} failures)")
+
+        # Discretize
+        train_bn = processor.discretize_for_bn(train_balanced)
+        test_bn = processor.discretize_for_bn(test_df)
+
+        # Train BN for this fold
+        diagnoser = BayesianDiagnoser()
+        diagnoser.train(train_bn)
+
+        # Collect predictions
+        preds_binary = {c: [] for c in latent_vars}
+        true_binary = {c: [] for c in latent_vars}
+
+        for _, row in test_bn.iterrows():
+            evidence = {c: float(row[c]) for c in obs_cols if pd.notna(row[c])}
+            probs_map, _ = diagnoser.diagnose(evidence)
+
+            for c in latent_vars:
+                p = probs_map.get(c, 0.0)
+                preds_binary[c].append(1 if p >= prob_threshold else 0)
+                true_binary[c].append(int(row.get(c, 0)))
+
+        # Compute metrics per cause for this fold
+        for c in latent_vars:
+            p, r, f1, _ = precision_recall_fscore_support(
+                true_binary[c], preds_binary[c],
+                average='binary',
+                zero_division=0
+            )
+            fold_metrics.append({
+                'fold': fold_idx,
+                'cause': c,
+                'precision': p,
+                'recall': r,
+                'f1': f1
+            })
+
+    # Convert to DataFrame
+    metrics_df = pd.DataFrame(fold_metrics)
+
+    # Compute mean and std per cause
+    summary = metrics_df.groupby('cause').agg({
+        'precision': ['mean', 'std'],
+        'recall': ['mean', 'std'],
+        'f1': ['mean', 'std']
+    }).round(3)
+
+    # Flatten multi-index columns
+    summary.columns = [f'{metric}_{stat}' for metric, stat in summary.columns]
+    summary = summary.reset_index()
+
+    print("\nSummary of Cross Validation - Mean and Standard Deviation:")
+    print(summary)
+
+    # Create output directory
+    output_dir = 'results'
+    sub_dir = f'threshold_{prob_threshold}'
+    os.makedirs(output_dir, exist_ok=True)
+    output_dir = os.path.join(output_dir, sub_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    metrics_df.to_csv(f'{output_dir}/cv_per_fold.csv', index=False)
+    summary.to_csv(f'{output_dir}/cv_summary.csv', index=False)
+
+    print(f"\nResults saved to '{output_dir}/' directory")
+
+    # Plot mean metrics with error bars
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    causes = summary['cause'].values
+    x = np.arange(len(causes))
+    width = 0.25
+
+    # Extract mean and std
+    p_mean = summary['precision_mean'].values
+    p_std = summary['precision_std'].values
+    r_mean = summary['recall_mean'].values
+    r_std = summary['recall_std'].values
+    f1_mean = summary['f1_mean'].values
+    f1_std = summary['f1_std'].values
+
+    ax.bar(x - width, p_mean, width, yerr=p_std, label='Precision', capsize=5)
+    ax.bar(x, r_mean, width, yerr=r_std, label='Recall', capsize=5)
+    ax.bar(x + width, f1_mean, width, yerr=f1_std, label='F1', capsize=5)
+
+    ax.set_xlabel('Cause')
+    ax.set_ylabel('Score')
+    ax.set_title(f'{n_splits}-Fold Cross-Validation Results (threshold={prob_threshold})')
+    ax.set_xticks(x)
+    ax.set_xticklabels(causes, rotation=15, ha='right')
+    ax.legend()
+    ax.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/cv_summary_plot.png', dpi=150)
+    plt.show()
